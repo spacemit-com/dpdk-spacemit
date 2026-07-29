@@ -66,9 +66,34 @@ vendor_sifive = {
     'arch_config': arch_config_riscv
 }
 
+vendor_spacemit = {
+    'description': 'Spacemit',
+    'flags': [
+        ['RTE_MACHINE', '"riscv"'],
+        ['RTE_USE_C11_MEM_MODEL', true],
+        ['RTE_MAX_LCORE', 8],
+        ['RTE_MAX_NUMA_NODES', 1],
+    ],
+    'arch_config': {
+        'k1': {
+            'machine_args': ['-march=rv64imafdc_zicbom'],
+            'flags': [
+                ['RTE_SOC_SPACEMIT_K1', true],
+            ]
+        },
+        'k3': {
+            'machine_args': ['-march=rv64imafdc_zicbom'],
+            'flags': [
+                ['RTE_SOC_SPACEMIT_K3', true],
+            ]
+        },
+    }
+}
+
 vendors = {
     'generic': vendor_generic,
-    '0x489': vendor_sifive
+    '0x489': vendor_sifive,
+    'spacemit': vendor_spacemit
 }
 
 # Native/cross vendor/arch detection
@@ -79,9 +104,19 @@ if not meson.is_cross_build()
         arch_id = 'generic'
         message('generic RISC-V')
     else
-        vendor_id = 'generic'
-        arch_id = 'generic'
-        warning('RISC-V arch discovery not available, using generic!')
+        if platform == 'spacemit_k1'
+            cpu_instruction_set = 'rv64gc'
+            vendor_id = 'spacemit'
+            arch_id = 'k1'
+        elif platform == 'spacemit_k3'
+            cpu_instruction_set = 'rv64gc'
+            vendor_id = 'spacemit'
+            arch_id = 'k3'
+        else
+            vendor_id = 'generic'
+            arch_id = 'generic'
+            warning('RISC-V arch discovery not available, using generic!')
+        endif
     endif
 else
     # cross build
