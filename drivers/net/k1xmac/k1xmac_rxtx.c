@@ -74,7 +74,7 @@ static int k1xmac_rx_frame_status(struct k1xmac_private *priv, struct emac_rx_de
  */
 uint16_t
 k1xmac_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
-		uint16_t nb_pkts)
+		 uint16_t nb_pkts)
 {
         struct k1xmac_rx_queue *rxq = (struct k1xmac_rx_queue *)rx_queue;
         struct rte_eth_dev *dev = &rte_eth_devices[rxq->port_id];
@@ -155,16 +155,16 @@ k1xmac_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
                 /* refill the descriptor */
 		rxq->rx_mbuf[tail] = new_mbuf;
                 memset(rx_desc, 0, sizeof(struct emac_rx_desc));
+		buf_phy_addr = rte_mbuf_data_iova_default(new_mbuf);
 #ifndef RTE_SOC_SPACEMIT_K1
-                buf_phy_addr = rte_cpu_to_le_64(rte_mbuf_data_iova_default(new_mbuf));
+		dma_addr = rte_cpu_to_le_32(buf_phy_addr);
 #else
-                buf_phy_addr = rte_mbuf_data_iova_default(new_mbuf);
-                if (buf_phy_addr >= 0x80000000) {
-                        buf_phy_addr = buf_phy_addr - 0x80000000;
-                }
-                dma_addr = rte_cpu_to_le_32(buf_phy_addr);
+		if (buf_phy_addr >= 0x80000000) {
+			buf_phy_addr = buf_phy_addr - 0x80000000;
+		}
+		dma_addr = rte_cpu_to_le_32(buf_phy_addr);
 #endif
-                rx_desc->BufferAddr1 = dma_addr;
+		rx_desc->BufferAddr1 = dma_addr;
 		rx_desc->BufferSize1 = rte_cpu_to_le_16(new_mbuf->buf_len);
 		rx_desc->FirstDescriptor = 0;
 		rx_desc->LastDescriptor = 0;
@@ -174,7 +174,7 @@ k1xmac_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		}
 		rte_wmb();
 		rx_desc->OWN = 1;
-        }
+	}
 
         rxq->rx_tail = tail;
         return nb_rx;

@@ -33,7 +33,7 @@ static int k1xmac_count;
 static bool
 file_name_match_extract(const char filename[], const char match[])
 {
-	char *substr = NULL;
+	const char *substr = NULL;
 
 	substr = strstr(filename, match);
 	if (substr == NULL)
