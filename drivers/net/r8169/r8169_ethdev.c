@@ -878,6 +878,254 @@ rtl_rss_hash_conf_get(struct rte_eth_dev *dev, struct rte_eth_rss_conf *rss_conf
 	return 0;
 }
 
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/types.h>
+
+#define STMMAC_UIO_MAX_DEVICE_FILE_NAME_LENGTH	30
+#define STMMAC_UIO_MAX_ATTR_FILE_NAME	100
+#define STMMAC_UIO_DEVICE_SYS_ATTR_PATH	"/sys/class/uio"
+#define STMMAC_UIO_DEVICE_SYS_MAP_ATTR	"maps/map"
+#define STMMAC_UIO_DEVICE_FILE_NAME	"/dev/uio"
+#define STMMAC_UIO_REG_MAP_ID		0
+#define STMMAC_UIO_RX_BD_MAP_ID	1
+#define STMMAC_UIO_TX_BD_MAP_ID	2
+#define STMMAC_UIO_RX_BD1_MAP_ID	3
+#define STMMAC_UIO_TX_BD1_MAP_ID	4
+
+//The intel using /dev/uio0/1/2/3 and rtl8111h r8169_uio_cnt start from number 4.
+static int r8169_uio_cnt = 0;
+u64 r8169_base_hw_addr = 0;
+u64 r8169_gbd_addr_b_p[5];
+u64 r8169_gbd_addr_r_p[5];
+u64 r8169_gbd_addr_t_p[5];
+u64 r8169_gbd_addr_x_p[5];
+
+void *r8169_gbd_addr_b_v[5];
+void *r8169_gbd_addr_t_v[5];
+void *r8169_gbd_addr_r_v[5];
+void *r8169_gbd_addr_x_v[5];
+
+size_t r8169_gbd_b_size[5];
+size_t r8169_gbd_r_size[5];
+size_t r8169_gbd_t_size[5];
+size_t r8169_gbd_x_size[5];
+
+struct uio_job {
+	uint32_t fec_id;
+	int uio_fd;
+	void *bd_start_addr;
+	void *register_base_addr;
+	int map_size;
+	uint64_t map_addr;
+	int uio_minor_number;
+};
+static struct uio_job guio_job;
+
+/*
+ * @brief Reads first line from a file.
+ * Composes file name as: root/subdir/filename
+ *
+ * @param [in]  root     Root path
+ * @param [in]  subdir   Subdirectory name
+ * @param [in]  filename File name
+ * @param [out] line     The first line read from file.
+ *
+ * @retval 0 for success
+ * @retval other value for error
+ */
+static int
+file_read_first_line(const char root[], const char subdir[],
+			const char filename[], char *line)
+{
+	char absolute_file_name[STMMAC_UIO_MAX_ATTR_FILE_NAME];
+	int fd = 0, ret = 0;
+
+	/*compose the file name: root/subdir/filename */
+	memset(absolute_file_name, 0, sizeof(absolute_file_name));
+	snprintf(absolute_file_name, STMMAC_UIO_MAX_ATTR_FILE_NAME,
+		"%s/%s/%s", root, subdir, filename);
+
+	fd = open(absolute_file_name, O_RDONLY);
+	if (fd <= 0)
+		printf("Error opening file %s\n", absolute_file_name);
+
+	/* read UIO device name from first line in file */
+	ret = read(fd, line, STMMAC_UIO_MAX_DEVICE_FILE_NAME_LENGTH);
+	if (ret <= 0) {
+		printf("Error reading file %s\n", absolute_file_name);
+		return ret;
+	}
+	close(fd);
+
+	/* NULL-ify string */
+	line[ret] = '\0';
+
+	return 0;
+}
+
+/*
+ * @brief Maps rx-tx bd range assigned for a bd ring.
+ *
+ * @param [in] uio_device_fd    UIO device file descriptor
+ * @param [in] uio_device_id    UIO device id
+ * @param [in] uio_map_id       UIO allows maximum 5 different mapping for
+				each device. Maps start with id 0.
+ * @param [out] map_size        Map size.
+ * @param [out] map_addr	Map physical address
+ *
+ * @retval  NULL if failed to map registers
+ * @retval  Virtual address for mapped register address range
+ */
+static void *
+guio_map_mem(int uio_device_fd, int uio_device_id,
+		int uio_map_id, int *map_size, uint64_t *map_addr)
+{
+	void *mapped_address = NULL;
+	u64 uio_map_size = 0;
+	phys_addr_t uio_map_p_addr = 0;
+	char uio_sys_root[100];
+	char uio_sys_map_subdir[100];
+	char uio_map_size_str[30 + 1];
+	char uio_map_p_addr_str[32];
+	int ret = 0;
+
+	/* compose the file name: root/subdir/filename */
+	memset(uio_sys_root, 0, sizeof(uio_sys_root));
+	memset(uio_sys_map_subdir, 0, sizeof(uio_sys_map_subdir));
+	memset(uio_map_size_str, 0, sizeof(uio_map_size_str));
+	memset(uio_map_p_addr_str, 0, sizeof(uio_map_p_addr_str));
+
+	/* Compose string: /sys/class/uio/uioX */
+	snprintf(uio_sys_root, sizeof(uio_sys_root), "%s/%s%d",
+			"/sys/class/uio", "uio", uio_device_id);
+	/* Compose string: maps/mapY */
+	snprintf(uio_sys_map_subdir, sizeof(uio_sys_map_subdir), "%s%d",
+			"maps/map", uio_map_id);
+
+	printf("US_UIO: uio_map_mem uio_sys_root: %s, uio_sys_map_subdir: %s, uio_map_size_str: %s\n",
+			uio_sys_root, uio_sys_map_subdir, uio_map_size_str);
+
+	/* Read first (and only) line from file
+	 * /sys/class/uio/uioX/maps/mapY/size
+	 */
+	ret = file_read_first_line(uio_sys_root, uio_sys_map_subdir,
+				"size", uio_map_size_str);
+	if (ret < 0) {
+		printf("file_read_first_line() failed\n");
+		return NULL;
+	}
+	ret = file_read_first_line(uio_sys_root, uio_sys_map_subdir,
+				"addr", uio_map_p_addr_str);
+	if (ret < 0) {
+		printf("file_read_first_line() failed\n");
+		return NULL;
+	}
+
+	/* Read mapping size and physical address expressed in hexa(base 16) */
+	uio_map_size = strtol(uio_map_size_str, NULL, 16);
+	uio_map_p_addr = strtol(uio_map_p_addr_str, NULL, 16);
+	printf("kernel size: 0x%lx, addr: 0x%lx\n", uio_map_size, uio_map_p_addr);
+
+	/* Map the BD memory in user space */
+	mapped_address = mmap(NULL, uio_map_size,
+			PROT_READ | PROT_WRITE,
+			MAP_SHARED, uio_device_fd, (uio_map_id * 4096));
+
+	if (mapped_address == MAP_FAILED) {
+		printf("Failed to map! errno = %d uio job fd = %d,"
+			"uio device id = %d, uio map id = %d\n", errno,
+			uio_device_fd, uio_device_id, uio_map_id);
+		return NULL;
+	}
+
+	/* Save the map size to use it later on for munmap-ing */
+	*map_size = uio_map_size;
+	*map_addr = uio_map_p_addr;
+
+	printf("UIO dev[%d] mapped region [id =%d] size 0x%lx map_addr_p: 0x%lx, at %p\n",
+		uio_device_id, uio_map_id, uio_map_size, *map_addr, mapped_address);
+
+	printf("UIO dev[%d] mapped region [id =%d] size 0x%lx at phy 0x%lx\n",
+		uio_device_id, uio_map_id, uio_map_size, rte_mem_virt2phy(mapped_address));
+
+	return mapped_address;
+}
+
+static int
+rconfig_pcie_uio(uint64_t hw_addr)
+{
+	char uio_device_file_name[32];
+	uint64_t addr;
+	int index;
+
+	printf("rconfig_pcie_uio\n");
+
+	if (r8169_base_hw_addr == 0) {
+		r8169_base_hw_addr = hw_addr;
+		addr = hw_addr;
+	} else {
+		addr = hw_addr;
+	}
+
+	/*
+	 * BAR2, addr: f0204000
+	 * BAR2, addr: f2204000
+	 * BAR2, addr: f4204000
+	 */
+	index = abs((int)(addr - r8169_base_hw_addr)) / 0x5000;
+	printf("index: %d, hw_addr: 0x%lx, r8169_base_hw_addr: 0x%lx\n", index, addr, r8169_base_hw_addr);
+	if ((index < 0) && (index > 3))
+		return -1;
+
+	snprintf(uio_device_file_name, sizeof(uio_device_file_name), "/dev/uio%d",
+			r8169_uio_cnt);
+
+	/* Open device file */
+	guio_job.uio_fd = open(uio_device_file_name, O_RDWR);
+	if (guio_job.uio_fd < 0) {
+		printf("Unable to open STMMAC_UIO file\n");
+		return -1;
+	}
+
+	r8169_gbd_addr_b_v[index] = guio_map_mem(guio_job.uio_fd,
+		r8169_uio_cnt, 0,
+		&guio_job.map_size, &guio_job.map_addr);
+	if (r8169_gbd_addr_b_v[index] == NULL)
+		return -ENOMEM;
+	r8169_gbd_addr_b_p[index] = guio_job.map_addr;
+	r8169_gbd_b_size[index] = guio_job.map_size;
+
+	r8169_gbd_addr_t_v[index] = guio_map_mem(guio_job.uio_fd,
+		r8169_uio_cnt, 2,
+		&guio_job.map_size, &guio_job.map_addr);
+	if (r8169_gbd_addr_t_v[index] == NULL)
+		return -ENOMEM;
+	r8169_gbd_addr_t_p[index] = guio_job.map_addr;
+	r8169_gbd_t_size[index] = guio_job.map_size;
+
+	r8169_gbd_addr_r_v[index] = guio_map_mem(guio_job.uio_fd,
+		r8169_uio_cnt, 3,
+		&guio_job.map_size, &guio_job.map_addr);
+	if (r8169_gbd_addr_r_v[index] == NULL)
+		return -ENOMEM;
+	r8169_gbd_addr_r_p[index] = guio_job.map_addr;
+	r8169_gbd_r_size[index] = guio_job.map_size;
+
+	r8169_gbd_addr_x_v[index] = guio_map_mem(guio_job.uio_fd,
+		r8169_uio_cnt, 4,
+		&guio_job.map_size, &guio_job.map_addr);
+	if (r8169_gbd_addr_x_v[index] == NULL)
+		return -ENOMEM;
+	r8169_gbd_addr_x_p[index] = guio_job.map_addr;
+	r8169_gbd_x_size[index] = guio_job.map_size;
+
+	r8169_uio_cnt++;
+
+	return 0;
+}
+
 static int
 rtl_dev_init(struct rte_eth_dev *dev)
 {
@@ -902,6 +1150,13 @@ rtl_dev_init(struct rte_eth_dev *dev)
 	/* R8169 uses BAR2 */
 	hw->mmio_addr = (u8 *)pci_dev->mem_resource[2].addr;
 
+	rconfig_pcie_uio((uint64_t)hw->mmio_addr);
+	int index;
+	index = abs((int)((uint64_t)hw->mmio_addr - r8169_base_hw_addr)) / 0x5000;
+	//hw->mmio_addr= r8169_gbd_addr_b_v[index]; //rtl8169 uses BAR2
+
+	printf("virt_addr 0x%lx:0x%lx\n", (unsigned long)pci_dev->mem_resource[2].addr, (unsigned long)r8169_gbd_addr_b_v[index]);
+	printf("phys_addr 0x%lx:0x%lx\n", pci_dev->mem_resource[2].phys_addr, r8169_gbd_addr_b_p[index]);
 	rtl_get_mac_version(hw, pci_dev);
 
 	if (rtl_set_hw_ops(hw))

@@ -14,6 +14,17 @@
 #include "r8169_dash.h"
 #include "r8169_fiber.h"
 
+extern u64 r8169_gbd_addr_b_p[5];
+extern u64 r8169_gbd_addr_r_p[5];
+extern u64 r8169_gbd_addr_t_p[5];
+extern u64 r8169_gbd_addr_x_p[5];
+
+extern void *r8169_gbd_addr_b_v[5];
+extern void *r8169_gbd_addr_t_v[5];
+extern void *r8169_gbd_addr_r_v[5];
+extern void *r8169_gbd_addr_x_v[5];
+extern u64 r8169_base_hw_addr;
+
 static u32
 rtl_eri_read_with_oob_base_address(struct rtl_hw *hw, int addr, int len,
 				   int type, const u32 base_address)
@@ -2506,10 +2517,17 @@ rtl_tally_init(struct rte_eth_dev *dev)
 
 	hw->tally_vaddr = mz->addr;
 	hw->tally_paddr = mz->iova;
+	printf("tally %p:0x%lx\n", hw->tally_vaddr, hw->tally_paddr);
+
+        int index;
+        index = abs((int)((uint64_t)hw->mmio_addr - r8169_base_hw_addr)) / 0x5000;
+        hw->tally_vaddr = r8169_gbd_addr_x_v[index]; //gbd_addr_x_v;
+        hw->tally_paddr = r8169_gbd_addr_x_p[index]; //gbd_addr_x_p;
+        printf("tally vp: %p:0x%lx\n", hw->tally_vaddr, hw->tally_paddr);
 
 	/* Fill tally addrs */
-	RTL_W32(hw, CounterAddrHigh, (u64)hw->tally_paddr >> 32);
-	RTL_W32(hw, CounterAddrLow, (u64)hw->tally_paddr & (DMA_BIT_MASK(32)));
+	RTL_W32(hw, CounterAddrHigh, hw->tally_paddr >> 32);
+	RTL_W32(hw, CounterAddrLow, hw->tally_paddr & (DMA_BIT_MASK(32)));
 
 	/* Reset the hw statistics */
 	rtl_clear_tally_stats(hw);
