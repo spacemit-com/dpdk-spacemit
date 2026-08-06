@@ -878,6 +878,7 @@ rtl_rss_hash_conf_get(struct rte_eth_dev *dev, struct rte_eth_rss_conf *rss_conf
 	return 0;
 }
 
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -894,7 +895,6 @@ rtl_rss_hash_conf_get(struct rte_eth_dev *dev, struct rte_eth_rss_conf *rss_conf
 #define STMMAC_UIO_RX_BD1_MAP_ID	3
 #define STMMAC_UIO_TX_BD1_MAP_ID	4
 
-//The intel using /dev/uio0/1/2/3 and rtl8111h r8169_uio_cnt start from number 4.
 static int r8169_uio_cnt = 0;
 u64 r8169_base_hw_addr = 0;
 u64 r8169_gbd_addr_b_p[5];
@@ -1125,6 +1125,7 @@ rconfig_pcie_uio(uint64_t hw_addr)
 
 	return 0;
 }
+#endif
 
 static int
 rtl_dev_init(struct rte_eth_dev *dev)
@@ -1149,14 +1150,15 @@ rtl_dev_init(struct rte_eth_dev *dev)
 
 	/* R8169 uses BAR2 */
 	hw->mmio_addr = (u8 *)pci_dev->mem_resource[2].addr;
-
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 	rconfig_pcie_uio((uint64_t)hw->mmio_addr);
 	int index;
 	index = abs((int)((uint64_t)hw->mmio_addr - r8169_base_hw_addr)) / 0x5000;
-	//hw->mmio_addr= r8169_gbd_addr_b_v[index]; //rtl8169 uses BAR2
 
 	printf("virt_addr 0x%lx:0x%lx\n", (unsigned long)pci_dev->mem_resource[2].addr, (unsigned long)r8169_gbd_addr_b_v[index]);
 	printf("phys_addr 0x%lx:0x%lx\n", pci_dev->mem_resource[2].phys_addr, r8169_gbd_addr_b_p[index]);
+#endif
+
 	rtl_get_mac_version(hw, pci_dev);
 
 	if (rtl_set_hw_ops(hw))

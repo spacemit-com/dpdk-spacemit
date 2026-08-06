@@ -25,6 +25,7 @@
 #include "r8169_hw.h"
 #include "r8169_logs.h"
 
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 extern u64 r8169_gbd_addr_b_p[5];
 extern u64 r8169_gbd_addr_r_p[5];
 extern u64 r8169_gbd_addr_t_p[5];
@@ -36,7 +37,6 @@ extern void *r8169_gbd_addr_r_v[5];
 extern void *r8169_gbd_addr_x_v[5];
 extern u64 r8169_base_hw_addr;
 
-#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 #define cbo_clean(start)			\
 	({								\
 		unsigned long __v = (unsigned long)(start); \
@@ -438,10 +438,7 @@ rtl_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	}
 
 	rxq->hw = hw;
-	rxq->hw_ring = mz->addr;
-	rxq->hw_ring_phys_addr = mz->iova;
-	rxq->offloads = rx_conf->offloads | dev->data->dev_conf.rxmode.offloads;
-
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 	int index;
 	index = abs((int)((uint64_t)hw->mmio_addr - r8169_base_hw_addr)) / 0x5000;
 	printf("index: %d, mmio_addr: 0x%lx, r8169_base_hw_addr: 0x%lx\n", index, (unsigned long)hw->mmio_addr, r8169_base_hw_addr);
@@ -452,6 +449,11 @@ rtl_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 						sizeof(struct rtl_rx_desc),
 						rxq->hw_ring_phys_addr,
 						rxq->hw_ring);
+#else
+	rxq->hw_ring = mz->addr;
+	rxq->hw_ring_phys_addr = mz->iova;
+#endif
+	rxq->offloads = rx_conf->offloads | dev->data->dev_conf.rxmode.offloads;
 
 	rtl_reset_rx_queue(rxq);
 
@@ -989,16 +991,30 @@ rtl_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 			rte_prefetch0(rtl_get_rxdesc(hw, rxq->hw_ring, tail));
 		}
 
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
+		{
+			uint8_t *new_data;
+			uint32_t flush_len;
+			uint32_t i;
+
+			new_data = rte_pktmbuf_mtod(new_mb, uint8_t *);
+			flush_len = new_mb->buf_len - rte_pktmbuf_headroom(new_mb);
+			for (i = 0; i < flush_len; i += 64) {
+				cbo_flush(new_data + i);
+			}
+		}
+#endif
+
 		/* Refill the RX desc */
 		rxe->mbuf = new_mb;
 #ifndef RTE_SOC_SPACEMIT_K1
 		dma_addr = rte_cpu_to_le_64(rte_mbuf_data_iova_default(new_mb));
 #else
-			dma_addr = rte_mbuf_data_iova_default(new_mb);
-			if (dma_addr >= 0x80000000) {
-				dma_addr = dma_addr - 0x80000000;
-			}
-			dma_addr = rte_cpu_to_le_64(dma_addr);
+		dma_addr = rte_mbuf_data_iova_default(new_mb);
+		if (dma_addr >= 0x80000000) {
+			dma_addr = dma_addr - 0x80000000;
+		}
+		dma_addr = rte_cpu_to_le_64(dma_addr);
 #endif
 
 		/* Setup RX descriptor */
@@ -1007,17 +1023,18 @@ rtl_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		pkt_len = opts1 & 0x00003fff;
 		pkt_len -= RTE_ETHER_CRC_LEN;
 
-#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
-			{
-				uint8_t *data;
-				uint16_t i;
-				data = rte_pktmbuf_mtod(rmb, uint8_t *);
-				for (i = 0; i < (pkt_len + RTE_ETHER_CRC_LEN); i += 64) {
-					cbo_invalid(data + i);
-				}
-			}
-#endif
 		rmb->data_off = RTE_PKTMBUF_HEADROOM;
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
+		{
+			uint8_t *data;
+			uint16_t i;
+			data = rte_pktmbuf_mtod(rmb, uint8_t *);
+			for (i = 0; i < (pkt_len + RTE_ETHER_CRC_LEN); i += 64) {
+				cbo_invalid(data + i);
+			}
+		}
+		rte_io_rmb();
+#endif
 		rte_prefetch1((char *)rmb->buf_addr + rmb->data_off);
 		rmb->nb_segs = 1;
 		rmb->next = NULL;
@@ -1141,18 +1158,6 @@ next_desc:
 			break;
 		}
 
-#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
-			{
-
-				uint8_t *data;
-				u32 i;
-				data = rte_pktmbuf_mtod(new_mb, uint8_t *);
-				for (i = 0; i < new_mb->buf_len; i += 64) {
-					cbo_invalid(data + i);
-				}
-
-			}
-#endif
 		nb_hold++;
 		rxe = &sw_ring[tail];
 
@@ -1172,16 +1177,30 @@ next_desc:
 			rte_prefetch0(rtl_get_rxdesc(hw, rxq->hw_ring, tail));
 		}
 
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
+		{
+			uint8_t *new_data;
+			uint32_t flush_len;
+			uint32_t i;
+
+			new_data = rte_pktmbuf_mtod(new_mb, uint8_t *);
+			flush_len = new_mb->buf_len - rte_pktmbuf_headroom(new_mb);
+			for (i = 0; i < flush_len; i += 64) {
+				cbo_flush(new_data + i);
+			}
+		}
+#endif
+
 		/* Refill the RX desc */
 		rxe->mbuf = new_mb;
 #ifndef RTE_SOC_SPACEMIT_K1
 		dma_addr = rte_cpu_to_le_64(rte_mbuf_data_iova_default(new_mb));
 #else
-			dma_addr = rte_mbuf_data_iova_default(new_mb);
-			if (dma_addr >= 0x80000000) {
-				dma_addr = dma_addr - 0x80000000;
-			}
-			dma_addr = rte_cpu_to_le_64(dma_addr);
+		dma_addr = rte_mbuf_data_iova_default(new_mb);
+		if (dma_addr >= 0x80000000) {
+			dma_addr = dma_addr - 0x80000000;
+		}
+		dma_addr = rte_cpu_to_le_64(dma_addr);
 #endif
 		/* Setup RX descriptor */
 		rtl_map_to_asic(hw, rxd, dma_addr);
@@ -1189,6 +1208,18 @@ next_desc:
 		data_len = opts1 & 0x00003fff;
 		rmb->data_len = data_len;
 		rmb->data_off = RTE_PKTMBUF_HEADROOM;
+
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
+		{
+			uint8_t *data;
+			uint16_t i;
+			data = rte_pktmbuf_mtod(rmb, uint8_t *);
+			for (i = 0; i < data_len; i += 64) {
+				cbo_invalid(data + i);
+			}
+		}
+		rte_io_rmb();
+#endif
 
 		/*
 		 * If this is the first buffer of the received packet,
@@ -1400,8 +1431,11 @@ rtl_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	/* Setup queue */
 	txq->nb_tx_desc = nb_tx_desc;
 	txq->port_id = dev->data->port_id;
-	//txq->queue_id = queue_idx;
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 	txq->queue_id = 0;
+#else
+	txq->queue_id = queue_idx;
+#endif
 	txq->tx_free_thresh = tx_conf->tx_free_thresh;
 
 	/* Allocate memory for the software ring */
@@ -1433,9 +1467,7 @@ rtl_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	}
 
 	txq->hw = hw;
-	txq->hw_ring = mz->addr;
-	txq->hw_ring_phys_addr = mz->iova;
-
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 	int index;
 	index = abs((int)((uint64_t)hw->mmio_addr - r8169_base_hw_addr)) / 0x5000;
 	printf("index: %d, mmio_addr: 0x%lx, r8169_base_hw_addr: 0x%lx\n", index, (unsigned long)hw->mmio_addr, r8169_base_hw_addr);
@@ -1446,11 +1478,18 @@ rtl_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 						sizeof(struct rtl_tx_desc),
 						txq->hw_ring_phys_addr,
 						txq->hw_ring);
+#else
+	txq->hw_ring = mz->addr;
+	txq->hw_ring_phys_addr = mz->iova;
+#endif
 
 	rtl_reset_tx_queue(txq);
 
-	//dev->data->tx_queues[queue_idx] = txq;
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 	dev->data->tx_queues[0] = txq;
+#else
+	dev->data->tx_queues[queue_idx] = txq;
+#endif
 
 	return 0;
 }
@@ -1761,11 +1800,14 @@ rtl_xmit_pkt(struct rtl_hw *hw, struct rtl_tx_queue *txq,
 #if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 		{
 			uint8_t *data;
-			u32 i;
+			uintptr_t i, offset;
+
 			data = rte_pktmbuf_mtod(m_seg, uint8_t *);
-			for (i = 0; i < len; i += 64) {
-				cbo_flush(data + i);
+			offset = (uintptr_t)data & 63ULL;
+			for (i = 0; i < (len + offset); i += 64) {
+				cbo_flush((uint8_t *)data - offset + i);
 			}
+			rte_wmb();
 		}
 #endif
 		opts1 |= len;
