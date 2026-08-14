@@ -882,6 +882,9 @@ rtl_rss_hash_conf_get(struct rte_eth_dev *dev, struct rte_eth_rss_conf *rss_conf
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <string.h>
+#include <dirent.h>
+#include <inttypes.h>
 #include <sys/types.h>
 
 #define STMMAC_UIO_MAX_DEVICE_FILE_NAME_LENGTH	30
@@ -895,8 +898,6 @@ rtl_rss_hash_conf_get(struct rte_eth_dev *dev, struct rte_eth_rss_conf *rss_conf
 #define STMMAC_UIO_RX_BD1_MAP_ID	3
 #define STMMAC_UIO_TX_BD1_MAP_ID	4
 
-static int r8169_uio_cnt = 0;
-u64 r8169_base_hw_addr = 0;
 u64 r8169_gbd_addr_b_p[5];
 u64 r8169_gbd_addr_r_p[5];
 u64 r8169_gbd_addr_t_p[5];
@@ -922,6 +923,70 @@ struct uio_job {
 	int uio_minor_number;
 };
 static struct uio_job guio_job;
+
+int r8169_get_uio_dev(struct rte_eth_dev *eth_dev)
+{
+	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
+	struct rte_pci_addr *loc = &pci_dev->addr;
+	int uio_num = -1;
+	struct dirent *e;
+	DIR *dir;
+	char dirname[PATH_MAX];
+
+	/* depending on kernel version, uio can be located in uio/uioX
+	 * or uio:uioX */
+
+	snprintf(dirname, sizeof(dirname),
+			"%s/" PCI_PRI_FMT "/uio", rte_pci_get_sysfs_path(),
+			loc->domain, loc->bus, loc->devid, loc->function);
+
+	dir = opendir(dirname);
+	if (dir == NULL) {
+		/* retry with the parent directory */
+		snprintf(dirname, sizeof(dirname),
+				"%s/" PCI_PRI_FMT, rte_pci_get_sysfs_path(),
+				loc->domain, loc->bus, loc->devid, loc->function);
+		dir = opendir(dirname);
+
+		if (dir == NULL) {
+			printf("Error: cannot opendir %s\n", dirname);
+			return -1;
+		}
+	}
+
+	/* take the first file starting with "uio" */
+	while ((e = readdir(dir)) != NULL) {
+		/* format could be uio%d ...*/
+		int shortprefix_len = sizeof("uio") - 1;
+		/* ... or uio:uio%d */
+		int longprefix_len = sizeof("uio:uio") - 1;
+		char *endptr;
+
+		if (strncmp(e->d_name, "uio", 3) != 0)
+			continue;
+
+		/* first try uio%d */
+		errno = 0;
+		uio_num = strtoull(e->d_name + shortprefix_len, &endptr, 10);
+		if (errno == 0 && endptr != (e->d_name + shortprefix_len)) {
+			break;
+		}
+
+		/* then try uio:uio%d */
+		errno = 0;
+		uio_num = strtoull(e->d_name + longprefix_len, &endptr, 10);
+		if (errno == 0 && endptr != (e->d_name + longprefix_len)) {
+			break;
+		}
+	}
+	closedir(dir);
+
+	/* No uio resource found */
+	if (e == NULL)
+		return -1;
+
+	return uio_num;
+}
 
 /*
  * @brief Reads first line from a file.
@@ -1054,33 +1119,19 @@ guio_map_mem(int uio_device_fd, int uio_device_id,
 }
 
 static int
-rconfig_pcie_uio(uint64_t hw_addr)
+rconfig_pcie_uio(struct rte_eth_dev *eth_dev)
 {
 	char uio_device_file_name[32];
-	uint64_t addr;
 	int index;
 
 	printf("rconfig_pcie_uio\n");
 
-	if (r8169_base_hw_addr == 0) {
-		r8169_base_hw_addr = hw_addr;
-		addr = hw_addr;
-	} else {
-		addr = hw_addr;
-	}
-
-	/*
-	 * BAR2, addr: f0204000
-	 * BAR2, addr: f2204000
-	 * BAR2, addr: f4204000
-	 */
-	index = abs((int)(addr - r8169_base_hw_addr)) / 0x5000;
-	printf("index: %d, hw_addr: 0x%lx, r8169_base_hw_addr: 0x%lx\n", index, addr, r8169_base_hw_addr);
-	if ((index < 0) && (index > 3))
+	index = r8169_get_uio_dev(eth_dev);
+	if ((index < 0) && (index > 4))
 		return -1;
 
 	snprintf(uio_device_file_name, sizeof(uio_device_file_name), "/dev/uio%d",
-			r8169_uio_cnt);
+			index);
 
 	/* Open device file */
 	guio_job.uio_fd = open(uio_device_file_name, O_RDWR);
@@ -1090,7 +1141,7 @@ rconfig_pcie_uio(uint64_t hw_addr)
 	}
 
 	r8169_gbd_addr_b_v[index] = guio_map_mem(guio_job.uio_fd,
-		r8169_uio_cnt, 0,
+		index, 0,
 		&guio_job.map_size, &guio_job.map_addr);
 	if (r8169_gbd_addr_b_v[index] == NULL)
 		return -ENOMEM;
@@ -1098,7 +1149,7 @@ rconfig_pcie_uio(uint64_t hw_addr)
 	r8169_gbd_b_size[index] = guio_job.map_size;
 
 	r8169_gbd_addr_t_v[index] = guio_map_mem(guio_job.uio_fd,
-		r8169_uio_cnt, 2,
+		index, 2,
 		&guio_job.map_size, &guio_job.map_addr);
 	if (r8169_gbd_addr_t_v[index] == NULL)
 		return -ENOMEM;
@@ -1106,7 +1157,7 @@ rconfig_pcie_uio(uint64_t hw_addr)
 	r8169_gbd_t_size[index] = guio_job.map_size;
 
 	r8169_gbd_addr_r_v[index] = guio_map_mem(guio_job.uio_fd,
-		r8169_uio_cnt, 3,
+		index, 3,
 		&guio_job.map_size, &guio_job.map_addr);
 	if (r8169_gbd_addr_r_v[index] == NULL)
 		return -ENOMEM;
@@ -1114,14 +1165,12 @@ rconfig_pcie_uio(uint64_t hw_addr)
 	r8169_gbd_r_size[index] = guio_job.map_size;
 
 	r8169_gbd_addr_x_v[index] = guio_map_mem(guio_job.uio_fd,
-		r8169_uio_cnt, 4,
+		index, 4,
 		&guio_job.map_size, &guio_job.map_addr);
 	if (r8169_gbd_addr_x_v[index] == NULL)
 		return -ENOMEM;
 	r8169_gbd_addr_x_p[index] = guio_job.map_addr;
 	r8169_gbd_x_size[index] = guio_job.map_size;
-
-	r8169_uio_cnt++;
 
 	return 0;
 }
@@ -1151,9 +1200,9 @@ rtl_dev_init(struct rte_eth_dev *dev)
 	/* R8169 uses BAR2 */
 	hw->mmio_addr = (u8 *)pci_dev->mem_resource[2].addr;
 #if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
-	rconfig_pcie_uio((uint64_t)hw->mmio_addr);
+	rconfig_pcie_uio(dev);
 	int index;
-	index = abs((int)((uint64_t)hw->mmio_addr - r8169_base_hw_addr)) / 0x5000;
+	index = r8169_get_uio_dev(dev);
 
 	printf("virt_addr 0x%lx:0x%lx\n", (unsigned long)pci_dev->mem_resource[2].addr, (unsigned long)r8169_gbd_addr_b_v[index]);
 	printf("phys_addr 0x%lx:0x%lx\n", pci_dev->mem_resource[2].phys_addr, r8169_gbd_addr_b_p[index]);

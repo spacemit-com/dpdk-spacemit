@@ -24,7 +24,6 @@ extern void *r8169_gbd_addr_b_v[5];
 extern void *r8169_gbd_addr_t_v[5];
 extern void *r8169_gbd_addr_r_v[5];
 extern void *r8169_gbd_addr_x_v[5];
-extern u64 r8169_base_hw_addr;
 #endif
 
 static u32
@@ -2522,7 +2521,7 @@ rtl_tally_init(struct rte_eth_dev *dev)
 
 #if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 	int index;
-	index = abs((int)((uint64_t)hw->mmio_addr - r8169_base_hw_addr)) / 0x5000;
+	index = r8169_get_uio_dev(dev);
 	hw->tally_vaddr = r8169_gbd_addr_x_v[index]; //gbd_addr_x_v;
 	hw->tally_paddr = r8169_gbd_addr_x_p[index]; //gbd_addr_x_p;
 	printf("tally vp: %p:0x%lx\n", hw->tally_vaddr, hw->tally_paddr);

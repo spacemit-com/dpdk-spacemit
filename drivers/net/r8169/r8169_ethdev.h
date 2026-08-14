@@ -304,4 +304,8 @@ rtl_get_rxdesc(struct rtl_hw *hw, struct rtl_rx_desc *base, u32 const number)
 	return (struct rtl_rx_desc *)((u8 *)base + hw->RxDescLength * number);
 }
 
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
+int r8169_get_uio_dev(struct rte_eth_dev *eth_dev);
+#endif
+
 #endif /* R8169_ETHDEV_H */

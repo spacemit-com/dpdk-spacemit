@@ -35,7 +35,6 @@ extern void *r8169_gbd_addr_b_v[5];
 extern void *r8169_gbd_addr_t_v[5];
 extern void *r8169_gbd_addr_r_v[5];
 extern void *r8169_gbd_addr_x_v[5];
-extern u64 r8169_base_hw_addr;
 
 #define cbo_clean(start)			\
 	({								\
@@ -440,8 +439,8 @@ rtl_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	rxq->hw = hw;
 #if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 	int index;
-	index = abs((int)((uint64_t)hw->mmio_addr - r8169_base_hw_addr)) / 0x5000;
-	printf("index: %d, mmio_addr: 0x%lx, r8169_base_hw_addr: 0x%lx\n", index, (unsigned long)hw->mmio_addr, r8169_base_hw_addr);
+	index = r8169_get_uio_dev(dev);
+	printf("index: %d, mmio_addr: 0x%lx\n", index, (unsigned long)hw->mmio_addr);
 	rxq->hw_ring_phys_addr = r8169_gbd_addr_r_p[index];
 	rxq->hw_ring = (struct rtl_rx_desc *)r8169_gbd_addr_r_v[index];
 	printf("hw rx ring size: %d:%ld[0x%lx:%p]\n",
@@ -1469,8 +1468,8 @@ rtl_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	txq->hw = hw;
 #if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 	int index;
-	index = abs((int)((uint64_t)hw->mmio_addr - r8169_base_hw_addr)) / 0x5000;
-	printf("index: %d, mmio_addr: 0x%lx, r8169_base_hw_addr: 0x%lx\n", index, (unsigned long)hw->mmio_addr, r8169_base_hw_addr);
+	index = r8169_get_uio_dev(dev);
+	printf("index: %d, mmio_addr: 0x%lx\n", index, (unsigned long)hw->mmio_addr);
 	txq->hw_ring_phys_addr = r8169_gbd_addr_t_p[index];
 	txq->hw_ring = (struct rtl_tx_desc *)r8169_gbd_addr_t_v[index];
 	printf("hw tx ring size: %d:%ld[0x%lx:%p]\n",
