@@ -16,13 +16,13 @@
 
 #if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 extern u64 r8169_gbd_addr_b_p[5];
-extern u64 r8169_gbd_addr_r_p[5];
-extern u64 r8169_gbd_addr_t_p[5];
+extern u64 r8169_gbd_addr_t_p[5][2];
+extern u64 r8169_gbd_addr_r_p[5][4];
 extern u64 r8169_gbd_addr_x_p[5];
 
 extern void *r8169_gbd_addr_b_v[5];
-extern void *r8169_gbd_addr_t_v[5];
-extern void *r8169_gbd_addr_r_v[5];
+extern void *r8169_gbd_addr_t_v[5][2];
+extern void *r8169_gbd_addr_r_v[5][4];
 extern void *r8169_gbd_addr_x_v[5];
 #endif
 
@@ -873,6 +873,9 @@ rtl8125_set_rss_hash_opt(struct rtl_hw *hw, u16 nb_rx_queues)
 	u32 hash_mask_len;
 	u32 rss_ctrl;
 
+	RTL_W32(hw, RSS_CTRL_8125, 0);
+	rte_io_wmb();
+
 	rss_ctrl = rte_log2_u32(nb_rx_queues);
 	rss_ctrl &= (BIT_0 | BIT_1 | BIT_2);
 	rss_ctrl <<= RSS_CPU_NUM_OFFSET;
@@ -921,10 +924,15 @@ void
 rtl8125_config_rss(struct rtl_hw *hw, u16 nb_rx_queues)
 {
 	rtl8125_set_rss_hash_opt(hw, nb_rx_queues);
+	rte_io_wmb();
 
 	rtl8125_store_reta(hw);
+	rte_io_wmb();
 
 	rtl8125_store_rss_key(hw);
+	rte_io_wmb();
+
+	rte_delay_ms(10);
 }
 
 static void
@@ -2471,16 +2479,22 @@ rtl_get_tally_stats(struct rtl_hw *hw, struct rte_eth_stats *rte_stats)
 	RTL_W32(hw, CounterAddrHigh, (u64)paddr >> 32);
 	cmd = (u64)paddr & DMA_BIT_MASK(32);
 	RTL_W32(hw, CounterAddrLow, cmd);
+	rte_io_wmb();
+
 	RTL_W32(hw, CounterAddrLow, cmd | CounterDump);
+	rte_io_wmb();
 
 	wait_cnt = 0;
 	while (RTL_R32(hw, CounterAddrLow) & CounterDump) {
 		rte_delay_us(10);
 
 		wait_cnt++;
-		if (wait_cnt > 20)
+		if (wait_cnt > 20) {
+			printf("Error: failed to get tally stats.\n");
 			break;
+		}
 	}
+	rte_mb();
 
 	/* RX errors */
 	rte_stats->imissed = rte_le_to_cpu_64(counters->rx_missed);
@@ -2520,10 +2534,10 @@ rtl_tally_init(struct rte_eth_dev *dev)
 	hw->tally_paddr = mz->iova;
 
 #if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
-	int index;
-	index = r8169_get_uio_dev(dev);
-	hw->tally_vaddr = r8169_gbd_addr_x_v[index]; //gbd_addr_x_v;
-	hw->tally_paddr = r8169_gbd_addr_x_p[index]; //gbd_addr_x_p;
+	int uio_num;
+	uio_num = r8169_get_uio_dev(dev);
+	hw->tally_vaddr = r8169_gbd_addr_x_v[uio_num]; //gbd_addr_x_v;
+	hw->tally_paddr = r8169_gbd_addr_x_p[uio_num]; //gbd_addr_x_p;
 	printf("tally vp: %p:0x%lx\n", hw->tally_vaddr, hw->tally_paddr);
 #endif
 

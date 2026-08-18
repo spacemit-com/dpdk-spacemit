@@ -27,13 +27,13 @@
 
 #if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 extern u64 r8169_gbd_addr_b_p[5];
-extern u64 r8169_gbd_addr_r_p[5];
-extern u64 r8169_gbd_addr_t_p[5];
+extern u64 r8169_gbd_addr_t_p[5][2];
+extern u64 r8169_gbd_addr_r_p[5][4];
 extern u64 r8169_gbd_addr_x_p[5];
 
 extern void *r8169_gbd_addr_b_v[5];
-extern void *r8169_gbd_addr_t_v[5];
-extern void *r8169_gbd_addr_r_v[5];
+extern void *r8169_gbd_addr_t_v[5][2];
+extern void *r8169_gbd_addr_r_v[5][4];
 extern void *r8169_gbd_addr_x_v[5];
 
 #define cbo_clean(start)			\
@@ -426,6 +426,7 @@ rtl_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	 * resizing in later calls to the queue setup function.
 	 */
 	size = hw->RxDescLength * (nb_rx_desc + 1);
+	printf("rx ring size: %ld, one desc size %d, nb rx desc %d\n", size, hw->RxDescLength, nb_rx_desc);
 	mz = rte_eth_dma_zone_reserve(dev, "rx_ring", queue_idx, size,
 				      RTL_RING_ALIGN, socket_id);
 	if (mz == NULL) {
@@ -438,11 +439,11 @@ rtl_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 
 	rxq->hw = hw;
 #if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
-	int index;
-	index = r8169_get_uio_dev(dev);
-	printf("index: %d, mmio_addr: 0x%lx\n", index, (unsigned long)hw->mmio_addr);
-	rxq->hw_ring_phys_addr = r8169_gbd_addr_r_p[index];
-	rxq->hw_ring = (struct rtl_rx_desc *)r8169_gbd_addr_r_v[index];
+	int uio_num;
+	uio_num = r8169_get_uio_dev(dev);
+	printf("uio num: %d, mmio_addr: 0x%lx\n", uio_num, (unsigned long)hw->mmio_addr);
+	rxq->hw_ring_phys_addr = r8169_gbd_addr_r_p[uio_num][queue_idx];
+	rxq->hw_ring = (struct rtl_rx_desc *)r8169_gbd_addr_r_v[uio_num][queue_idx];
 	printf("hw rx ring size: %d:%ld[0x%lx:%p]\n",
 						size,
 						sizeof(struct rtl_rx_desc),
@@ -568,10 +569,10 @@ rtl_alloc_rx_queue_mbufs(struct rtl_rx_queue *rxq)
 #if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
 		{
 			uint8_t *data;
-			u32 i;
+			u32 off;
 			data = rte_pktmbuf_mtod(mbuf, uint8_t *);
-			for (i = 0; i < mbuf->buf_len; i += 64) {
-				cbo_invalid(data + i);
+			for (off = 0; off < mbuf->buf_len; off += 64) {
+				cbo_invalid(data + off);
 			}
 		}
 #endif
@@ -1063,7 +1064,11 @@ rtl_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 
 	nb_hold = (uint16_t)(nb_hold + rxq->nb_rx_hold);
 	if (nb_hold > rxq->rx_free_thresh) {
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
+		rte_io_wmb();
+#else
 		rte_wmb();
+#endif
 
 		/* Clear RDU */
 		rtl_clear_rdu(hw, rxq->queue_id);
@@ -1431,7 +1436,8 @@ rtl_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	txq->nb_tx_desc = nb_tx_desc;
 	txq->port_id = dev->data->port_id;
 #if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
-	txq->queue_id = 0;
+	//txq->queue_id = 0;
+	txq->queue_id = queue_idx;
 #else
 	txq->queue_id = queue_idx;
 #endif
@@ -1467,11 +1473,11 @@ rtl_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 
 	txq->hw = hw;
 #if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
-	int index;
-	index = r8169_get_uio_dev(dev);
-	printf("index: %d, mmio_addr: 0x%lx\n", index, (unsigned long)hw->mmio_addr);
-	txq->hw_ring_phys_addr = r8169_gbd_addr_t_p[index];
-	txq->hw_ring = (struct rtl_tx_desc *)r8169_gbd_addr_t_v[index];
+	int uio_num;
+	uio_num = r8169_get_uio_dev(dev);
+	printf("uio num: %d, mmio_addr: 0x%lx\n", uio_num, (unsigned long)hw->mmio_addr);
+	txq->hw_ring_phys_addr = r8169_gbd_addr_t_p[uio_num][queue_idx];
+	txq->hw_ring = (struct rtl_tx_desc *)r8169_gbd_addr_t_v[uio_num][queue_idx];
 	printf("hw tx ring size: %d:%ld[0x%lx:%p]\n",
 						size,
 						sizeof(struct rtl_tx_desc),
@@ -1485,7 +1491,8 @@ rtl_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	rtl_reset_tx_queue(txq);
 
 #if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
-	dev->data->tx_queues[0] = txq;
+	//dev->data->tx_queues[0] = txq;
+	dev->data->tx_queues[queue_idx] = txq;
 #else
 	dev->data->tx_queues[queue_idx] = txq;
 #endif
@@ -1828,6 +1835,9 @@ rtl_xmit_pkt(struct rtl_hw *hw, struct rtl_tx_queue *txq,
 		txd->opts2 = rte_cpu_to_le_32(opts2);
 		rte_wmb();
 		txd->opts1 = rte_cpu_to_le_32(opts1);
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
+		rte_io_wmb();
+#endif
 
 		tail = (tail + 1) % nb_tx_desc;
 
@@ -2159,7 +2169,11 @@ rtl_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		rtl_xmit_pkt(hw, txq, tx_pkt);
 	}
 
+#if defined(RTE_SOC_SPACEMIT_K1) || defined(RTE_SOC_SPACEMIT_K3)
+	rte_io_wmb();
+#else
 	rte_wmb();
+#endif
 
 	if (nb_tx > 0)
 		rtl_doorbell(hw, txq);

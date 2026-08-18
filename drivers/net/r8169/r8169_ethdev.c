@@ -414,6 +414,8 @@ rtl_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->max_rx_pktlen = JUMBO_FRAME_9K;
 	dev_info->max_mac_addrs = 1;
 
+	printf("hw->mcfg: %d\n", hw->mcfg);
+
 	if (hw->mcfg >= CFG_METHOD_69) {
 		dev_info->max_rx_queues = 4;
 		dev_info->max_tx_queues = 2;
@@ -421,6 +423,8 @@ rtl_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		dev_info->max_rx_queues = 1;
 		dev_info->max_tx_queues = 1;
 	}
+
+	printf("max_rx_queues: %d, max_tx_queues: %d\n", dev_info->max_rx_queues, dev_info->max_tx_queues);
 
 	dev_info->default_rxconf = (struct rte_eth_rxconf) {
 		.rx_free_thresh = RTL_RX_FREE_THRESH,
@@ -557,6 +561,11 @@ rtl_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats,
 
 	rtl_get_tally_stats(hw, rte_stats);
 	rtl_sw_stats_get(dev, rte_stats);
+
+	printf("rx_packets: %llu, tx_packets: %llu\n", rte_stats->ipackets, rte_stats->opackets);
+	printf("rx_bytes: %llu, tx_bytes: %llu\n", rte_stats->ibytes, rte_stats->obytes);
+	printf("rx_errors: %llu, tx_errors: %llu\n", rte_stats->ierrors, rte_stats->oerrors);
+	printf("rx_missed: %llu\n", rte_stats->imissed);
 
 	return 0;
 }
@@ -899,18 +908,18 @@ rtl_rss_hash_conf_get(struct rte_eth_dev *dev, struct rte_eth_rss_conf *rss_conf
 #define STMMAC_UIO_TX_BD1_MAP_ID	4
 
 u64 r8169_gbd_addr_b_p[5];
-u64 r8169_gbd_addr_r_p[5];
-u64 r8169_gbd_addr_t_p[5];
+u64 r8169_gbd_addr_t_p[5][2];
+u64 r8169_gbd_addr_r_p[5][4];
 u64 r8169_gbd_addr_x_p[5];
 
 void *r8169_gbd_addr_b_v[5];
-void *r8169_gbd_addr_t_v[5];
-void *r8169_gbd_addr_r_v[5];
+void *r8169_gbd_addr_t_v[5][2];
+void *r8169_gbd_addr_r_v[5][4];
 void *r8169_gbd_addr_x_v[5];
 
 size_t r8169_gbd_b_size[5];
-size_t r8169_gbd_r_size[5];
-size_t r8169_gbd_t_size[5];
+size_t r8169_gbd_t_size[5][2];
+size_t r8169_gbd_r_size[5][4];
 size_t r8169_gbd_x_size[5];
 
 struct uio_job {
@@ -1122,16 +1131,16 @@ static int
 rconfig_pcie_uio(struct rte_eth_dev *eth_dev)
 {
 	char uio_device_file_name[32];
-	int index;
+	int uio_num = -1;
 
 	printf("rconfig_pcie_uio\n");
 
-	index = r8169_get_uio_dev(eth_dev);
-	if ((index < 0) && (index > 4))
+	uio_num = r8169_get_uio_dev(eth_dev);
+	if ((uio_num < 0) && (uio_num > 4))
 		return -1;
 
 	snprintf(uio_device_file_name, sizeof(uio_device_file_name), "/dev/uio%d",
-			index);
+			uio_num);
 
 	/* Open device file */
 	guio_job.uio_fd = open(uio_device_file_name, O_RDWR);
@@ -1140,37 +1149,69 @@ rconfig_pcie_uio(struct rte_eth_dev *eth_dev)
 		return -1;
 	}
 
-	r8169_gbd_addr_b_v[index] = guio_map_mem(guio_job.uio_fd,
-		index, 0,
+	r8169_gbd_addr_b_v[uio_num] = guio_map_mem(guio_job.uio_fd,
+		uio_num, 0,
 		&guio_job.map_size, &guio_job.map_addr);
-	if (r8169_gbd_addr_b_v[index] == NULL)
+	if (r8169_gbd_addr_b_v[uio_num] == NULL)
 		return -ENOMEM;
-	r8169_gbd_addr_b_p[index] = guio_job.map_addr;
-	r8169_gbd_b_size[index] = guio_job.map_size;
+	r8169_gbd_addr_b_p[uio_num] = guio_job.map_addr;
+	r8169_gbd_b_size[uio_num] = guio_job.map_size;
 
-	r8169_gbd_addr_t_v[index] = guio_map_mem(guio_job.uio_fd,
-		index, 2,
+	r8169_gbd_addr_t_v[uio_num][0] = guio_map_mem(guio_job.uio_fd,
+		uio_num, 2,
 		&guio_job.map_size, &guio_job.map_addr);
-	if (r8169_gbd_addr_t_v[index] == NULL)
+	if (r8169_gbd_addr_t_v[uio_num][0] == NULL)
 		return -ENOMEM;
-	r8169_gbd_addr_t_p[index] = guio_job.map_addr;
-	r8169_gbd_t_size[index] = guio_job.map_size;
+	r8169_gbd_addr_t_p[uio_num][0] = guio_job.map_addr;
+	r8169_gbd_t_size[uio_num][0] = guio_job.map_size;
 
-	r8169_gbd_addr_r_v[index] = guio_map_mem(guio_job.uio_fd,
-		index, 3,
+	r8169_gbd_addr_t_v[uio_num][1] = guio_map_mem(guio_job.uio_fd,
+		uio_num, 3,
 		&guio_job.map_size, &guio_job.map_addr);
-	if (r8169_gbd_addr_r_v[index] == NULL)
+	if (r8169_gbd_addr_t_v[uio_num][1] == NULL)
 		return -ENOMEM;
-	r8169_gbd_addr_r_p[index] = guio_job.map_addr;
-	r8169_gbd_r_size[index] = guio_job.map_size;
+	r8169_gbd_addr_t_p[uio_num][1] = guio_job.map_addr;
+	r8169_gbd_t_size[uio_num][1] = guio_job.map_size;
 
-	r8169_gbd_addr_x_v[index] = guio_map_mem(guio_job.uio_fd,
-		index, 4,
+	r8169_gbd_addr_r_v[uio_num][0] = guio_map_mem(guio_job.uio_fd,
+		uio_num, 4,
 		&guio_job.map_size, &guio_job.map_addr);
-	if (r8169_gbd_addr_x_v[index] == NULL)
+	if (r8169_gbd_addr_r_v[uio_num][0] == NULL)
 		return -ENOMEM;
-	r8169_gbd_addr_x_p[index] = guio_job.map_addr;
-	r8169_gbd_x_size[index] = guio_job.map_size;
+	r8169_gbd_addr_r_p[uio_num][0] = guio_job.map_addr;
+	r8169_gbd_r_size[uio_num][0] = guio_job.map_size;
+
+	r8169_gbd_addr_r_v[uio_num][1] = guio_map_mem(guio_job.uio_fd,
+		uio_num, 5,
+		&guio_job.map_size, &guio_job.map_addr);
+	if (r8169_gbd_addr_r_v[uio_num][1] == NULL)
+		return -ENOMEM;
+	r8169_gbd_addr_r_p[uio_num][1] = guio_job.map_addr;
+	r8169_gbd_r_size[uio_num][1] = guio_job.map_size;
+
+	r8169_gbd_addr_r_v[uio_num][2] = guio_map_mem(guio_job.uio_fd,
+		uio_num, 6,
+		&guio_job.map_size, &guio_job.map_addr);
+	if (r8169_gbd_addr_r_v[uio_num][2] == NULL)
+		return -ENOMEM;
+	r8169_gbd_addr_r_p[uio_num][2] = guio_job.map_addr;
+	r8169_gbd_r_size[uio_num][2] = guio_job.map_size;
+
+	r8169_gbd_addr_r_v[uio_num][3] = guio_map_mem(guio_job.uio_fd,
+		uio_num, 7,
+		&guio_job.map_size, &guio_job.map_addr);
+	if (r8169_gbd_addr_r_v[uio_num][3] == NULL)
+		return -ENOMEM;
+	r8169_gbd_addr_r_p[uio_num][3] = guio_job.map_addr;
+	r8169_gbd_r_size[uio_num][3] = guio_job.map_size;
+
+	r8169_gbd_addr_x_v[uio_num] = guio_map_mem(guio_job.uio_fd,
+		uio_num, 8,
+		&guio_job.map_size, &guio_job.map_addr);
+	if (r8169_gbd_addr_x_v[uio_num] == NULL)
+		return -ENOMEM;
+	r8169_gbd_addr_x_p[uio_num] = guio_job.map_addr;
+	r8169_gbd_x_size[uio_num] = guio_job.map_size;
 
 	return 0;
 }

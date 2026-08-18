@@ -2066,6 +2066,12 @@ fwd_stats_display(void)
 				__func__, pt_id, ret);
 			continue;
 		}
+
+		printf("stats imissed: %"PRIu64" oerrors: %"PRIu64" rx_nombuf: %"PRIu64"\n",
+		       stats.imissed, stats.oerrors, stats.rx_nombuf);
+		printf("port stats imissed: %"PRIu64" oerrors: %"PRIu64" rx_nombuf: %"PRIu64"\n",
+		       port->stats.imissed, port->stats.oerrors, port->stats.rx_nombuf);
+
 		stats.ipackets -= port->stats.ipackets;
 		stats.opackets -= port->stats.opackets;
 		stats.ibytes -= port->stats.ibytes;

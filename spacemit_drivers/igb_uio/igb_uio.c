@@ -515,19 +515,20 @@ igbuio_setup_bars(struct pci_dev *dev, struct uio_info *info)
 	//2
 	ret = igbuio_alloc_coherent_desc_ring(dev, info, iom, "TX");
 	iom++;
+	ret = igbuio_alloc_coherent_desc_ring(dev, info, iom, "TX1");
+	iom++;
 	ret = igbuio_alloc_coherent_desc_ring(dev, info, iom, "RX");
 	iom++;
+	ret = igbuio_alloc_coherent_desc_ring(dev, info, iom, "RX1");
+	iom++;
+	ret = igbuio_alloc_coherent_desc_ring(dev, info, iom, "RX2");
+	iom++;
+	ret = igbuio_alloc_coherent_desc_ring(dev, info, iom, "RX3");
+	iom++;
 	ret = igbuio_alloc_coherent_desc_ring(dev, info, iom, "type");
+	iom++;
+
 	/*
-	iom++;
-	ret = igbuio_alloc_coherent_desc_ring(dev, info, iom, "type_tx");
-	iom++;
-	ret = igbuio_alloc_coherent_desc_ring(dev, info, iom, "type_rx");
-	iom++;
-	ret = igbuio_alloc_coherent_desc_ring(dev, info, iom, "DESCS");
-	iom++;
-	ret = igbuio_alloc_coherent_desc_ring(dev, info, iom, "DESCR");
-	iom++;
 	ret = igbuio_alloc_coherent_desc_ring(dev, info, iom, "DESCS1");
 	iom++;
 	ret = igbuio_alloc_coherent_desc_ring(dev, info, iom, "DESCR1");
